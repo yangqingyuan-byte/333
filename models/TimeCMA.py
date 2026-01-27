@@ -1,5 +1,4 @@
 import torch.nn as nn
-from einops import rearrange
 from layers.StandardNorm import Normalize
 from layers.Cross_Modal_Align import CrossModal
 
@@ -43,12 +42,12 @@ class Dual(nn.Module):
         # 4. 通用实践：ViT、BERT等模型都采用类似策略（patch embedding + 固定d_model）
         # 5. 平衡设计：在模型复杂度、训练稳定性和表达能力之间取得平衡
         self.ts_encoder_layer = nn.TransformerEncoderLayer(d_model = self.channel, nhead = self.head, batch_first=True, 
-                                                           norm_first = True,dropout = self.dropout_n).to(self.device)
+                                                           dropout = self.dropout_n).to(self.device)
         self.ts_encoder = nn.TransformerEncoder(self.ts_encoder_layer, num_layers = self.e_layer).to(self.device)
 
         # Prompt Encoder
         self.prompt_encoder_layer = nn.TransformerEncoderLayer(d_model = self.d_llm, nhead = self.head, batch_first=True, 
-                                                               norm_first = True,dropout = self.dropout_n).to(self.device)
+                                                               dropout = self.dropout_n).to(self.device)
         self.prompt_encoder = nn.TransformerEncoder(self.prompt_encoder_layer, num_layers = self.e_layer).to(self.device)
 
         # Cross-modality alignment
@@ -58,7 +57,7 @@ class Dual(nn.Module):
                                 dropout=self.dropout_n, pre_norm=True, activation="gelu", res_attention=True, n_layers=1, store_attn=False).to(self.device)
 
         # Transformer decoder
-        self.decoder_layer = nn.TransformerDecoderLayer(d_model = self.channel, nhead = self.head, batch_first=True, norm_first = True, dropout = self.dropout_n).to(self.device)
+        self.decoder_layer = nn.TransformerDecoderLayer(d_model = self.channel, nhead = self.head, batch_first=True, dropout = self.dropout_n).to(self.device)
         self.decoder = nn.TransformerDecoder(self.decoder_layer, num_layers = self.d_layer).to(self.device)
 
         # Projection
@@ -71,27 +70,21 @@ class Dual(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     def forward(self, input_data, input_data_mark, embeddings):
-        step = 1
         # 输入维度: 
         # - input_data: [B, L, N] = [16, 96, 7] (时间序列数据)
         # - input_data_mark: [16, 96, 6] (时间戳特征)
         # - embeddings: [16, 768, 7, 1] (GPT-2生成的文本embedding，由时间序列转换成的文本prompt经过GPT-2处理得到)
-        print(f"[步骤 {step}] [输入] input_data: {input_data.shape}, input_data_mark: {input_data_mark.shape}, embeddings: {embeddings.shape}")
         input_data = input_data.float()
         input_data_mark = input_data_mark.float()
         embeddings = embeddings.float()
 
         # RevIN
-        step += 1
         # 输出维度: [B, L, N] = [16, 96, 7]
         input_data = self.normalize_layers(input_data, 'norm')
-        print(f"[步骤 {step}] [RevIN归一化后] input_data: {input_data.shape}")
 
-        step += 1
         # 输出维度: [B, N, L] = [16, 7, 96]
         input_data = input_data.permute(0,2,1) # [B, N, L]
-        print(f"[步骤 {step}] [Permute后] input_data: {input_data.shape}")
-        step += 1
+        
         # 将时间序列的长度维度(L)压缩成特征维度(C)，实现序列到特征的转换
         # 为什么需要这一步？
         # 1. TransformerEncoder要求输入特征维度=d_model=channel(32)，但原始数据是[B,N,L]=[B,7,96]
@@ -108,42 +101,28 @@ class Dual(nn.Module):
         # - 可能影响模型性能和训练稳定性
         # 输出维度: [B, N, C] = [16, 7, 32]
         input_data = self.length_to_feature(input_data) # [B, N, C]
-        print(f"[步骤 {step}] [length_to_feature后] input_data: {input_data.shape}")
 
         embeddings = embeddings.float()
-        step += 1
         # embeddings来源：由时间序列数据转换成的文本prompt，经过GPT-2模型处理得到的文本embedding
         # 生成过程：时间序列数据 → 文本prompt（如"From [t1] to [t2], the values were ..."） 
         #          → GPT-2 tokenizer → tokens → GPT-2模型 → last_hidden_state → 最后一个token的embedding
         # 这不是简单的token，而是经过GPT-2 Transformer层深度处理后的语义embedding（d_llm=768）
         # 输出维度: [B, E, N] = [16, 768, 7] (E=768是GPT-2的embedding维度，N=7是节点数)
         embeddings = embeddings.squeeze(-1) # [B, E, N]
-        print(f"[步骤 {step}] [squeeze后] embeddings: {embeddings.shape}")
-        step += 1
         # 输出维度: [B, N, E] = [16, 7, 768]
         embeddings = embeddings.permute(0,2,1) # [B, N, E]
-        print(f"[步骤 {step}] [Permute后] embeddings: {embeddings.shape}")
 
         # Encoder
-        step += 1
         # 输出维度: [B, N, C] = [16, 7, 32]
         enc_out = self.ts_encoder(input_data) # [B, N, C]
-        print(f"[步骤 {step}] [时间序列编码器后] enc_out: {enc_out.shape}")
-        step += 1
         # 输出维度: [B, C, N] = [16, 32, 7]
         enc_out = enc_out.permute(0,2,1) # [B, C, N]
-        print(f"[步骤 {step}] [Permute后] enc_out: {enc_out.shape}")
-        step += 1
         # 输出维度: [B, N, E] = [16, 7, 768]
         embeddings = self.prompt_encoder(embeddings) # [B, N, E]
-        print(f"[步骤 {step}] [提示编码器后] embeddings: {embeddings.shape}")
-        step += 1
         # 输出维度: [B, E, N] = [16, 768, 7]
         embeddings = embeddings.permute(0,2,1) # [B, E, N]
-        print(f"[步骤 {step}] [Permute后] embeddings: {embeddings.shape}")
 
         # Cross
-        step += 1
         # 跨模态对齐操作（Cross-Modal Attention）：
         # 1. 输入：Q=时间序列特征[B,C,N]=[16,32,7]，K=V=文本embeddings[B,E,N]=[16,768,7]
         # 2. 多头注意力机制（n_heads=1）：
@@ -157,33 +136,21 @@ class Dual(nn.Module):
         # 作用：让时间序列特征（Q）从文本embeddings（KV）中学习相关信息，实现跨模态对齐
         # 输出维度: [B, C, N] = [16, 32, 7] (Q: [16,32,7] X KV: [16,768,7])
         cross_out = self.cross(enc_out, embeddings, embeddings) # Q X KV  [B, C, N]X[B, E, N] = [B, C, N]
-        print(f"[步骤 {step}] [跨模态对齐后] cross_out: {cross_out.shape}")
-        step += 1
         # 输出维度: [B, N, C] = [16, 7, 32]
         cross_out = cross_out.permute(0,2,1) # [B, N, C]
-        print(f"[步骤 {step}] [Permute后] cross_out: {cross_out.shape}")
 
         # Decoder
-        step += 1
         # 输出维度: [B, N, C] = [16, 7, 32]
         dec_out = self.decoder(cross_out, cross_out) # [B, N, C]
-        print(f"[步骤 {step}] [解码器后] dec_out: {dec_out.shape}")
 
         # Projection
-        step += 1
         # 输出维度: [B, N, L] = [16, 7, 96]
         dec_out = self.c_to_length(dec_out) # [B, N, L]
-        print(f"[步骤 {step}] [投影层后] dec_out: {dec_out.shape}")
-        step += 1
         # 输出维度: [B, L, N] = [16, 96, 7]
         dec_out = dec_out.permute(0,2,1) # [B, L, N]
-        print(f"[步骤 {step}] [Permute后] dec_out: {dec_out.shape}")
 
         # denorm
-        step += 1
         # 输出维度: [B, L, N] = [16, 96, 7]
         dec_out = self.normalize_layers(dec_out, 'denorm')
-        print(f"[步骤 {step}] [反归一化后] dec_out: {dec_out.shape}")
-        print("-" * 80)
 
         return dec_out

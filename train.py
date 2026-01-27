@@ -180,10 +180,10 @@ def main():
         train_mae = []
         
         for iter, (x,y,x_mark,y_mark, embeddings) in enumerate(train_loader):
-            trainx = torch.Tensor(x).to(device) # [B, L, N]
-            trainy = torch.Tensor(y).to(device)
-            trainx_mark = torch.Tensor(x_mark).to(device) 
-            train_embedding = torch.Tensor(embeddings).to(device)
+            trainx = torch.tensor(x, dtype=torch.float32).to(device) # [B, L, N]
+            trainy = torch.tensor(y, dtype=torch.float32).to(device)
+            trainx_mark = torch.tensor(x_mark, dtype=torch.float32).to(device) 
+            train_embedding = torch.tensor(embeddings, dtype=torch.float32).to(device)
             metrics = engine.train(trainx, trainx_mark, train_embedding, trainy)
             train_loss.append(metrics[0])
             train_mae.append(metrics[1])
@@ -199,10 +199,10 @@ def main():
         s1 = time.time()
 
         for iter, (x,y,x_mark,y_mark, embeddings) in enumerate(val_loader):
-            valx = torch.Tensor(x).to(device)
-            valy = torch.Tensor(y).to(device)
-            valx_mark = torch.Tensor(x_mark).to(device)
-            val_embedding = torch.Tensor(embeddings).to(device)
+            valx = torch.tensor(x, dtype=torch.float32).to(device)
+            valy = torch.tensor(y, dtype=torch.float32).to(device)
+            valx_mark = torch.tensor(x_mark, dtype=torch.float32).to(device)
+            val_embedding = torch.tensor(embeddings, dtype=torch.float32).to(device)
             metrics = engine.eval(valx, valx_mark, val_embedding, valy)
             val_loss.append(metrics[0])
             val_mae.append(metrics[1])
@@ -246,10 +246,10 @@ def main():
                 test_y = []
 
                 for iter, (x,y,x_mark,y_mark, embeddings) in enumerate(test_loader):
-                    testx = torch.Tensor(x).to(device)
-                    testy = torch.Tensor(y).to(device)
-                    testx_mark = torch.Tensor(x_mark).to(device)
-                    test_embedding = torch.Tensor(embeddings).to(device)
+                    testx = torch.tensor(x, dtype=torch.float32).to(device)
+                    testy = torch.tensor(y, dtype=torch.float32).to(device)
+                    testx_mark = torch.tensor(x_mark, dtype=torch.float32).to(device)
+                    test_embedding = torch.tensor(embeddings, dtype=torch.float32).to(device)
                     with torch.no_grad():
                         preds = engine.model(testx, testx_mark, test_embedding)
                     test_outputs.append(preds)
@@ -314,10 +314,10 @@ def main():
     test_y = []
 
     for iter, (x,y,x_mark,y_mark, embeddings) in enumerate(test_loader):
-        testx = torch.Tensor(x).to(device)
-        testy = torch.Tensor(y).to(device)
-        testx_mark = torch.Tensor(x_mark).to(device)
-        test_embedding = torch.Tensor(embeddings).to(device)
+        testx = torch.tensor(x, dtype=torch.float32).to(device)
+        testy = torch.tensor(y, dtype=torch.float32).to(device)
+        testx_mark = torch.tensor(x_mark, dtype=torch.float32).to(device)
+        test_embedding = torch.tensor(embeddings, dtype=torch.float32).to(device)
         with torch.no_grad():
             preds = engine.model(testx, testx_mark, test_embedding)
         test_outputs.append(preds)

@@ -6,6 +6,7 @@
 # - 11 个种子 (2020-2030)
 # - 共 2 * 4 * 11 = 88 个实验
 # - 分配到 8 张 GPU（每张 GPU 约 11 个实验）
+# - 每个 GPU 单次并行运行 4 个任务
 # ============================================================================
 
 export PYTHONPATH=/root/0/TimeCMA:$PYTHONPATH
@@ -17,6 +18,9 @@ batch_size=16
 epochs=100
 head=8
 d_ff=32
+
+# 每个 GPU 单次并行任务数（4个会OOM，改成2个）
+PARALLEL_TASKS=2
 
 # 创建日志目录
 mkdir -p ./Results_MultiSeed/TimeCMA/${data_path}/
@@ -44,12 +48,21 @@ echo "=========================================="
 echo "Generating task assignments..."
 echo "=========================================="
 
-# 创建任务分配文件
+# 创建任务分配文件（使用数组存储每个 GPU 的任务）
 for gpu_id in 0 1 2 3 4 5 6 7; do
     echo "#!/bin/bash" > /tmp/gpu_${gpu_id}_tasks.sh
     echo "export PYTHONPATH=/root/0/TimeCMA:\$PYTHONPATH" >> /tmp/gpu_${gpu_id}_tasks.sh
     echo "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True" >> /tmp/gpu_${gpu_id}_tasks.sh
     echo "" >> /tmp/gpu_${gpu_id}_tasks.sh
+    # 初始化任务计数器（用于判断何时插入 wait）
+    echo "gpu_task_count=0" >> /tmp/gpu_${gpu_id}_tasks.sh
+    echo "" >> /tmp/gpu_${gpu_id}_tasks.sh
+done
+
+# 记录每个 GPU 当前批次内的任务数
+declare -A GPU_BATCH_COUNT
+for gpu_id in 0 1 2 3 4 5 6 7; do
+    GPU_BATCH_COUNT[$gpu_id]=0
 done
 
 # 任务计数器
@@ -80,10 +93,19 @@ for model in "TimeCMA" "TimeCMA_BiCross"; do
             
             log_file="${log_path}pred${pred_len}_c${channel}_dn${dropout_n}_el${e_layer}_dl${d_layer}_seed${seed}.log"
             
-            # 添加任务到对应 GPU 的脚本
+            # 检查是否需要在之前插入 wait（每 4 个任务后）
+            batch_count=${GPU_BATCH_COUNT[$gpu_id]}
+            if [ $batch_count -eq $PARALLEL_TASKS ]; then
+                # 插入 wait 等待前一批任务完成
+                echo "wait  # 等待前 ${PARALLEL_TASKS} 个任务完成" >> /tmp/gpu_${gpu_id}_tasks.sh
+                echo "echo \"[GPU ${gpu_id}] Batch completed, starting next batch...\"" >> /tmp/gpu_${gpu_id}_tasks.sh
+                echo "" >> /tmp/gpu_${gpu_id}_tasks.sh
+                GPU_BATCH_COUNT[$gpu_id]=0
+            fi
+            
+            # 添加任务到对应 GPU 的脚本（后台运行 &）
             cat >> /tmp/gpu_${gpu_id}_tasks.sh << EOF
-
-echo "[GPU ${gpu_id}] ${model} pred_len=${pred_len} seed=${seed}"
+echo "[GPU ${gpu_id}] Starting: ${model} pred_len=${pred_len} seed=${seed}"
 CUDA_VISIBLE_DEVICES=${gpu_id} python ${train_script} \\
     --data_path ${data_path} \\
     --batch_size ${batch_size} \\
@@ -98,14 +120,22 @@ CUDA_VISIBLE_DEVICES=${gpu_id} python ${train_script} \\
     --e_layer ${e_layer} \\
     --d_layer ${d_layer} \\
     --head ${head} \\
-    > "${log_file}" 2>&1
-echo "[GPU ${gpu_id}] Completed: ${model} pred_len=${pred_len} seed=${seed}"
+    > "${log_file}" 2>&1 &
 
 EOF
             
+            # 更新批次计数
+            GPU_BATCH_COUNT[$gpu_id]=$((${GPU_BATCH_COUNT[$gpu_id]} + 1))
             task_id=$((task_id + 1))
         done
     done
+done
+
+# 为每个 GPU 脚本末尾添加最后的 wait
+for gpu_id in 0 1 2 3 4 5 6 7; do
+    echo "" >> /tmp/gpu_${gpu_id}_tasks.sh
+    echo "wait  # 等待最后一批任务完成" >> /tmp/gpu_${gpu_id}_tasks.sh
+    echo "echo \"[GPU ${gpu_id}] All tasks completed!\"" >> /tmp/gpu_${gpu_id}_tasks.sh
 done
 
 # 统计每张 GPU 的任务数
